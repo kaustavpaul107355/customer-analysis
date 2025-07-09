@@ -59,6 +59,54 @@ def sql_query_with_user_token(query: str, user_token: str) -> pd.DataFrame:
 
 st.set_page_config(layout="wide", page_title="Customer Purchase Behavior Analytics")
 
+# Inject custom CSS for modern look
+st.markdown('''
+    <style>
+    /* Card-like containers */
+    .stDataFrame, .stPlotlyChart, .stMetric, .stTabs [data-baseweb="tab-list"] {
+        background: #232946 !important;
+        border-radius: 16px !important;
+        box-shadow: 0 2px 16px 0 rgba(0,0,0,0.10);
+        padding: 1.5rem 1rem 1rem 1rem;
+        margin-bottom: 1.5rem;
+    }
+    /* Accent headers */
+    h1, h2, h3, h4, h5, h6 {
+        color: #00B8A9 !important;
+        letter-spacing: 0.5px;
+    }
+    /* Tab highlight */
+    .stTabs [data-baseweb="tab"] {
+        color: #F4F4F9 !important;
+        font-weight: 600;
+        border-radius: 8px 8px 0 0;
+        background: #393E46;
+        margin-right: 2px;
+    }
+    .stTabs [aria-selected="true"] {
+        background: #00B8A9 !important;
+        color: #232946 !important;
+    }
+    /* Button accent */
+    .stButton>button {
+        background: linear-gradient(90deg, #00B8A9 0%, #3EDBF0 100%) !important;
+        color: #232946 !important;
+        border-radius: 8px !important;
+        font-weight: 700;
+        border: none;
+    }
+    /* Metric cards */
+    .stMetric {
+        background: #393E46 !important;
+        border-radius: 12px !important;
+        padding: 1rem !important;
+        margin-bottom: 1rem;
+    }
+    /* Remove Streamlit watermark */
+    footer {visibility: hidden;}
+    </style>
+''', unsafe_allow_html=True)
+
 # Extract user access token from the request headers
 user_token = st.context.headers.get('X-Forwarded-Access-Token')
 
