@@ -7,35 +7,55 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-# Ensure environment variable is set correctly
-assert os.getenv('DATABRICKS_WAREHOUSE_ID'), "DATABRICKS_WAREHOUSE_ID must be set in app.yaml."
+# Check environment variable with better error handling
+warehouse_id = os.getenv('DATABRICKS_WAREHOUSE_ID')
+if not warehouse_id:
+    st.error("❌ DATABRICKS_WAREHOUSE_ID environment variable is not set.")
+    st.info("Please ensure the environment variable is configured in app.yaml or your environment.")
+    st.stop()
 
 # Databricks config
-cfg = Config()
+try:
+    cfg = Config()
+except Exception as e:
+    st.error(f"❌ Failed to initialize Databricks configuration: {str(e)}")
+    st.stop()
 
 # Query the SQL warehouse with Service Principal credentials
 def sql_query_with_service_principal(query: str) -> pd.DataFrame:
     """Execute a SQL query and return the result as a pandas DataFrame."""
-    with sql.connect(
-        server_hostname=cfg.host,
-        http_path=f"/sql/1.0/warehouses/{cfg.warehouse_id}",
-        credentials_provider=lambda: cfg.authenticate  # Uses SP credentials from the environment variables
-    ) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query)
-            return cursor.fetchall_arrow().to_pandas()
+    try:
+        with sql.connect(
+            server_hostname=cfg.host,
+            http_path=f"/sql/1.0/warehouses/{cfg.warehouse_id}",
+            credentials_provider=lambda: cfg.authenticate  # Uses SP credentials from the environment variables
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query)
+                return cursor.fetchall_arrow().to_pandas()
+    except Exception as e:
+        st.error(f"❌ Database connection error: {str(e)}")
+        return pd.DataFrame()
 
 # Query the SQL warehouse with the user credentials
 def sql_query_with_user_token(query: str, user_token: str) -> pd.DataFrame:
     """Execute a SQL query and return the result as a pandas DataFrame."""
-    with sql.connect(
-        server_hostname=cfg.host,
-        http_path=f"/sql/1.0/warehouses/{cfg.warehouse_id}",
-        access_token=user_token  # Pass the user token into the SQL connect to query on behalf of user
-    ) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query)
-            return cursor.fetchall_arrow().to_pandas()
+    if not user_token:
+        st.error("❌ User access token is missing.")
+        return pd.DataFrame()
+    
+    try:
+        with sql.connect(
+            server_hostname=cfg.host,
+            http_path=f"/sql/1.0/warehouses/{cfg.warehouse_id}",
+            access_token=user_token  # Pass the user token into the SQL connect to query on behalf of user
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query)
+                return cursor.fetchall_arrow().to_pandas()
+    except Exception as e:
+        st.error(f"❌ Database query error: {str(e)}")
+        return pd.DataFrame()
 
 st.set_page_config(layout="wide", page_title="Customer Purchase Behavior Analytics")
 
@@ -49,6 +69,11 @@ st.markdown("---")
 # Query the SQL data with the user credentials
 try:
     data = sql_query_with_user_token("SELECT * FROM kaustavpaul_demo.demo_schema.customer_purchase_behavior LIMIT 5000", user_token=user_token)
+    
+    # Check if data is empty
+    if data.empty:
+        st.warning("⚠️ No data returned from the database. Please check your table and permissions.")
+        st.stop()
     
     # Create tabs
     tab1, tab2 = st.tabs(["📋 Data Overview", "📊 Analytics"])
@@ -73,15 +98,23 @@ try:
             st.subheader("📊 Column Information")
             col_info = []
             for col in data.columns:
-                dtype = str(data[col].dtype)
-                null_count = data[col].isnull().sum()
-                unique_count = data[col].nunique()
-                col_info.append({
-                    "Column": col,
-                    "Data Type": dtype,
-                    "Null Values": null_count,
-                    "Unique Values": unique_count
-                })
+                try:
+                    dtype = str(data[col].dtype)
+                    null_count = data[col].isnull().sum()
+                    unique_count = data[col].nunique()
+                    col_info.append({
+                        "Column": col,
+                        "Data Type": dtype,
+                        "Null Values": null_count,
+                        "Unique Values": unique_count
+                    })
+                except Exception as e:
+                    col_info.append({
+                        "Column": col,
+                        "Data Type": "Error",
+                        "Null Values": "Error",
+                        "Unique Values": "Error"
+                    })
             
             col_df = pd.DataFrame(col_info)
             st.dataframe(col_df, use_container_width=True)
@@ -90,14 +123,22 @@ try:
             st.subheader("📈 Quick Stats")
             st.metric("Total Records", f"{len(data):,}")
             st.metric("Total Columns", len(data.columns))
-            st.metric("Memory Usage", f"{data.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
+            
+            try:
+                memory_usage = data.memory_usage(deep=True).sum() / 1024 / 1024
+                st.metric("Memory Usage", f"{memory_usage:.2f} MB")
+            except:
+                st.metric("Memory Usage", "N/A")
             
             # Data quality indicators
             st.subheader("🔍 Data Quality")
-            total_cells = len(data) * len(data.columns)
-            null_cells = data.isnull().sum().sum()
-            completeness = ((total_cells - null_cells) / total_cells) * 100
-            st.metric("Data Completeness", f"{completeness:.1f}%")
+            try:
+                total_cells = len(data) * len(data.columns)
+                null_cells = data.isnull().sum().sum()
+                completeness = ((total_cells - null_cells) / total_cells) * 100 if total_cells > 0 else 0
+                st.metric("Data Completeness", f"{completeness:.1f}%")
+            except:
+                st.metric("Data Completeness", "N/A")
         
         # Sample records
         st.subheader("📄 Sample Records")
@@ -122,12 +163,28 @@ try:
         # Category filter at the top
         st.subheader("🔍 Filter by Category")
         if category_cols:
-            selected_category = st.selectbox("Select Category", 
-                                           ["All Categories"] + list(data[category_cols[0]].unique()))
-            if selected_category != "All Categories":
-                filtered_data = data[data[category_cols[0]] == selected_category]
-            else:
+            try:
+                # Get unique categories and sort them
+                unique_categories = sorted(data[category_cols[0]].dropna().unique())
+                
+                # Create multiselect for multiple category selection
+                selected_categories = st.multiselect(
+                    "Select Categories (leave empty for all categories)",
+                    options=unique_categories,
+                    default=[],
+                    help="Choose one or more categories to filter the data. Leave empty to show all categories."
+                )
+                
+                # Filter data based on selected categories
+                if selected_categories:
+                    filtered_data = data[data[category_cols[0]].isin(selected_categories)]
+                    st.success(f"Showing data for {len(selected_categories)} selected category(ies): {', '.join(selected_categories)}")
+                else:
+                    filtered_data = data
+                    st.info("Showing data for all categories")
+            except Exception as e:
                 filtered_data = data
+                st.warning(f"Error in category filtering: {str(e)}")
         else:
             filtered_data = data
             st.info("No category columns available for filtering.")
@@ -138,25 +195,41 @@ try:
         
         with metric_col1:
             if amount_cols:
-                st.metric("Average Purchase", f"${filtered_data[amount_cols[0]].mean():.2f}")
+                try:
+                    avg_purchase = filtered_data[amount_cols[0]].mean()
+                    st.metric("Average Purchase", f"${avg_purchase:.2f}" if pd.notna(avg_purchase) else "$0.00")
+                except:
+                    st.metric("Average Purchase", "N/A")
             else:
                 st.metric("Total Records", f"{len(filtered_data):,}")
         
         with metric_col2:
             if amount_cols:
-                st.metric("Total Revenue", f"${filtered_data[amount_cols[0]].sum():,.2f}")
+                try:
+                    total_revenue = filtered_data[amount_cols[0]].sum()
+                    st.metric("Total Revenue", f"${total_revenue:,.2f}" if pd.notna(total_revenue) else "$0.00")
+                except:
+                    st.metric("Total Revenue", "N/A")
             else:
                 st.metric("Unique Categories", f"{len(category_cols) if category_cols else 0}")
         
         with metric_col3:
             if amount_cols:
-                st.metric("Max Purchase", f"${filtered_data[amount_cols[0]].max():.2f}")
+                try:
+                    max_purchase = filtered_data[amount_cols[0]].max()
+                    st.metric("Max Purchase", f"${max_purchase:.2f}" if pd.notna(max_purchase) else "$0.00")
+                except:
+                    st.metric("Max Purchase", "N/A")
             else:
                 st.metric("Date Range", f"{len(date_cols) if date_cols else 'N/A'}")
         
         with metric_col4:
             if amount_cols:
-                st.metric("Min Purchase", f"${filtered_data[amount_cols[0]].min():.2f}")
+                try:
+                    min_purchase = filtered_data[amount_cols[0]].min()
+                    st.metric("Min Purchase", f"${min_purchase:.2f}" if pd.notna(min_purchase) else "$0.00")
+                except:
+                    st.metric("Min Purchase", "N/A")
             else:
                 st.metric("Columns", len(filtered_data.columns))
         
@@ -173,80 +246,98 @@ try:
             
             if customer_cols and amount_cols:
                 # Customer purchase analysis with multiple metrics
-                customer_analysis = filtered_data.groupby(customer_cols[0]).agg({
-                    amount_cols[0]: ['sum', 'mean', 'count'],
-                }).reset_index()
-                
-                # Flatten column names
-                customer_analysis.columns = [customer_cols[0], 'Total_Spent', 'Avg_Purchase', 'Purchase_Count']
-                
-                # Add customer segments
-                customer_analysis['Customer_Segment'] = pd.cut(
-                    customer_analysis['Total_Spent'], 
-                    bins=3, 
-                    labels=['Low Value', 'Medium Value', 'High Value']
-                )
-                
-                # Create comprehensive customer analysis
-                col1a, col1b = st.columns(2)
-                
-                with col1a:
-                    # Customer segments distribution
-                    segment_counts = customer_analysis['Customer_Segment'].value_counts()
-                    fig_segments = px.pie(
-                        values=segment_counts.values, 
-                        names=segment_counts.index,
-                        title="Customer Value Segments",
-                        color_discrete_sequence=px.colors.qualitative.Set3
-                    )
-                    st.plotly_chart(fig_segments, use_container_width=True)
-                
-                with col1b:
-                    # Top customers by total spent
-                    top_customers = customer_analysis.nlargest(10, 'Total_Spent')
-                    fig_top = px.bar(
-                        top_customers, 
-                        x=customer_cols[0], 
-                        y='Total_Spent',
-                        title="Top 10 Customers by Total Spent",
-                        labels={'Total_Spent': 'Total Amount ($)'}
-                    )
-                    fig_top.update_xaxis(tickangle=45)
-                    st.plotly_chart(fig_top, use_container_width=True)
-                
-                # Customer behavior scatter plot
-                fig_scatter = px.scatter(
-                    customer_analysis, 
-                    x='Purchase_Count', 
-                    y='Total_Spent',
-                    size='Avg_Purchase',
-                    color='Customer_Segment',
-                    hover_data=[customer_cols[0]],
-                    title="Customer Purchase Behavior Analysis",
-                    labels={
-                        'Purchase_Count': 'Number of Purchases', 
-                        'Total_Spent': 'Total Amount Spent ($)',
-                        'Avg_Purchase': 'Average Purchase Amount',
-                        'Customer_Segment': 'Customer Segment'
-                    }
-                )
-                st.plotly_chart(fig_scatter, use_container_width=True)
-                
-                # Customer insights summary
-                st.subheader("📊 Customer Insights")
-                insight_col1, insight_col2, insight_col3, insight_col4 = st.columns(4)
-                
-                with insight_col1:
-                    st.metric("Total Customers", len(customer_analysis))
-                
-                with insight_col2:
-                    st.metric("Avg Customer Value", f"${customer_analysis['Total_Spent'].mean():.2f}")
-                
-                with insight_col3:
-                    st.metric("High Value Customers", len(customer_analysis[customer_analysis['Customer_Segment'] == 'High Value']))
-                
-                with insight_col4:
-                    st.metric("Avg Purchase Frequency", f"{customer_analysis['Purchase_Count'].mean():.1f}")
+                try:
+                    customer_analysis = filtered_data.groupby(customer_cols[0]).agg({
+                        amount_cols[0]: ['sum', 'mean', 'count'],
+                    }).reset_index()
+                    # Flatten column names
+                    customer_analysis.columns = [customer_cols[0], 'Total_Spent', 'Avg_Purchase', 'Purchase_Count']
+                    # Add customer segments with error handling
+                    try:
+                        customer_analysis['Customer_Segment'] = pd.cut(
+                            customer_analysis['Total_Spent'], 
+                            bins=3, 
+                            labels=['Low Value', 'Medium Value', 'High Value']
+                        )
+                    except Exception as e:
+                        st.warning(f"Could not create customer segments: {str(e)}")
+                        customer_analysis['Customer_Segment'] = 'Unknown'
+                except Exception as e:
+                    st.error(f"Error in customer analysis: {str(e)}")
+                    customer_analysis = pd.DataFrame()
+                # Only show visualizations if we have data
+                if not customer_analysis.empty:
+                    col1a, col1b = st.columns(2)
+                    with col1a:
+                        try:
+                            segment_counts = customer_analysis['Customer_Segment'].value_counts()
+                            fig_segments = px.pie(
+                                values=segment_counts.values, 
+                                names=segment_counts.index,
+                                title="Customer Value Segments",
+                                color_discrete_sequence=px.colors.qualitative.Set3
+                            )
+                            st.plotly_chart(fig_segments, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Error creating segments chart: {str(e)}")
+                    with col1b:
+                        try:
+                            top_customers = customer_analysis.nlargest(10, 'Total_Spent')
+                            fig_top = px.bar(
+                                top_customers, 
+                                x=customer_cols[0], 
+                                y='Total_Spent',
+                                title="Top 10 Customers by Total Spent",
+                                labels={'Total_Spent': 'Total Amount ($)'}
+                            )
+                            fig_top.update_xaxis(tickangle=45)
+                            st.plotly_chart(fig_top, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Error creating top customers chart: {str(e)}")
+                    try:
+                        fig_scatter = px.scatter(
+                            customer_analysis, 
+                            x='Purchase_Count', 
+                            y='Total_Spent',
+                            size='Avg_Purchase',
+                            color='Customer_Segment',
+                            hover_data=[customer_cols[0]],
+                            title="Customer Purchase Behavior Analysis",
+                            labels={
+                                'Purchase_Count': 'Number of Purchases', 
+                                'Total_Spent': 'Total Amount Spent ($)',
+                                'Avg_Purchase': 'Average Purchase Amount',
+                                'Customer_Segment': 'Customer Segment'
+                            }
+                        )
+                        st.plotly_chart(fig_scatter, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error creating scatter plot: {str(e)}")
+                    st.subheader("📊 Customer Insights")
+                    insight_col1, insight_col2, insight_col3, insight_col4 = st.columns(4)
+                    with insight_col1:
+                        try:
+                            st.metric("Total Customers", len(customer_analysis))
+                        except:
+                            st.metric("Total Customers", "N/A")
+                    with insight_col2:
+                        try:
+                            avg_value = customer_analysis['Total_Spent'].mean()
+                            st.metric("Avg Customer Value", f"${avg_value:.2f}" if pd.notna(avg_value) else "$0.00")
+                        except:
+                            st.metric("Avg Customer Value", "N/A")
+                    with insight_col3:
+                        try:
+                            high_value_count = len(customer_analysis[customer_analysis['Customer_Segment'] == 'High Value'])
+                            st.metric("High Value Customers", high_value_count)
+                        except:
+                            st.metric("High Value Customers", "N/A")
+                    with insight_col4:
+                        try:
+                            avg_frequency = customer_analysis['Purchase_Count'].mean()
+                            st.metric("Avg Purchase Frequency", f"{avg_frequency:.1f}" if pd.notna(avg_frequency) else "0.0")
+                        except:
+                            st.metric("Avg Purchase Frequency", "N/A")
                 
             elif customer_cols:
                 # Customer frequency analysis when no amount data
