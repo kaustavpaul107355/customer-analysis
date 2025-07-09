@@ -166,33 +166,233 @@ try:
         with col1:
             st.subheader("👥 Customer Analysis")
             
+            # Try to identify geographic columns
+            state_cols = [col for col in data.columns if 'state' in col.lower() or 'province' in col.lower()]
+            country_cols = [col for col in data.columns if 'country' in col.lower()]
+            city_cols = [col for col in data.columns if 'city' in col.lower()]
+            
             if customer_cols and amount_cols:
-                # Customer purchase analysis
-                customer_purchases = filtered_data.groupby(customer_cols[0])[amount_cols[0]].agg(['sum', 'count', 'mean']).reset_index()
-                customer_purchases.columns = [customer_cols[0], 'Total_Spent', 'Purchase_Count', 'Avg_Purchase']
+                # Customer purchase analysis with multiple metrics
+                customer_analysis = filtered_data.groupby(customer_cols[0]).agg({
+                    amount_cols[0]: ['sum', 'mean', 'count'],
+                }).reset_index()
                 
-                # Create scatter plot of customer behavior
-                fig = px.scatter(customer_purchases, 
-                               x='Purchase_Count', 
-                               y='Total_Spent',
-                               size='Avg_Purchase',
-                               hover_data=[customer_cols[0]],
-                               title="Customer Purchase Behavior Analysis",
-                               labels={'Purchase_Count': 'Number of Purchases', 
-                                      'Total_Spent': 'Total Amount Spent ($)',
-                                      'Avg_Purchase': 'Average Purchase Amount'})
-                st.plotly_chart(fig, use_container_width=True)
+                # Flatten column names
+                customer_analysis.columns = [customer_cols[0], 'Total_Spent', 'Avg_Purchase', 'Purchase_Count']
+                
+                # Add customer segments
+                customer_analysis['Customer_Segment'] = pd.cut(
+                    customer_analysis['Total_Spent'], 
+                    bins=3, 
+                    labels=['Low Value', 'Medium Value', 'High Value']
+                )
+                
+                # Create comprehensive customer analysis
+                col1a, col1b = st.columns(2)
+                
+                with col1a:
+                    # Customer segments distribution
+                    segment_counts = customer_analysis['Customer_Segment'].value_counts()
+                    fig_segments = px.pie(
+                        values=segment_counts.values, 
+                        names=segment_counts.index,
+                        title="Customer Value Segments",
+                        color_discrete_sequence=px.colors.qualitative.Set3
+                    )
+                    st.plotly_chart(fig_segments, use_container_width=True)
+                
+                with col1b:
+                    # Top customers by total spent
+                    top_customers = customer_analysis.nlargest(10, 'Total_Spent')
+                    fig_top = px.bar(
+                        top_customers, 
+                        x=customer_cols[0], 
+                        y='Total_Spent',
+                        title="Top 10 Customers by Total Spent",
+                        labels={'Total_Spent': 'Total Amount ($)'}
+                    )
+                    fig_top.update_xaxis(tickangle=45)
+                    st.plotly_chart(fig_top, use_container_width=True)
+                
+                # Customer behavior scatter plot
+                fig_scatter = px.scatter(
+                    customer_analysis, 
+                    x='Purchase_Count', 
+                    y='Total_Spent',
+                    size='Avg_Purchase',
+                    color='Customer_Segment',
+                    hover_data=[customer_cols[0]],
+                    title="Customer Purchase Behavior Analysis",
+                    labels={
+                        'Purchase_Count': 'Number of Purchases', 
+                        'Total_Spent': 'Total Amount Spent ($)',
+                        'Avg_Purchase': 'Average Purchase Amount',
+                        'Customer_Segment': 'Customer Segment'
+                    }
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+                
+                # Customer insights summary
+                st.subheader("📊 Customer Insights")
+                insight_col1, insight_col2, insight_col3, insight_col4 = st.columns(4)
+                
+                with insight_col1:
+                    st.metric("Total Customers", len(customer_analysis))
+                
+                with insight_col2:
+                    st.metric("Avg Customer Value", f"${customer_analysis['Total_Spent'].mean():.2f}")
+                
+                with insight_col3:
+                    st.metric("High Value Customers", len(customer_analysis[customer_analysis['Customer_Segment'] == 'High Value']))
+                
+                with insight_col4:
+                    st.metric("Avg Purchase Frequency", f"{customer_analysis['Purchase_Count'].mean():.1f}")
+                
             elif customer_cols:
-                # Customer frequency analysis
+                # Customer frequency analysis when no amount data
                 customer_counts = filtered_data[customer_cols[0]].value_counts()
-                fig = px.bar(x=customer_counts.head(20).index, 
-                           y=customer_counts.head(20).values,
-                           title="Top 20 Customers by Purchase Frequency",
-                           labels={'x': 'Customer ID', 'y': 'Number of Purchases'})
-                st.plotly_chart(fig, use_container_width=True)
+                
+                col1a, col1b = st.columns(2)
+                
+                with col1a:
+                    # Top customers by frequency
+                    top_frequent = customer_counts.head(15)
+                    fig_frequent = px.bar(
+                        x=top_frequent.values, 
+                        y=top_frequent.index,
+                        orientation='h',
+                        title="Top 15 Customers by Purchase Frequency",
+                        labels={'x': 'Number of Purchases', 'y': 'Customer ID'}
+                    )
+                    st.plotly_chart(fig_frequent, use_container_width=True)
+                
+                with col1b:
+                    # Customer frequency distribution
+                    fig_dist = px.histogram(
+                        x=customer_counts.values,
+                        nbins=20,
+                        title="Customer Purchase Frequency Distribution",
+                        labels={'x': 'Number of Purchases', 'y': 'Number of Customers'}
+                    )
+                    st.plotly_chart(fig_dist, use_container_width=True)
+                
+                # Customer insights
+                st.subheader("📊 Customer Insights")
+                insight_col1, insight_col2, insight_col3, insight_col4 = st.columns(4)
+                
+                with insight_col1:
+                    st.metric("Total Customers", len(customer_counts))
+                
+                with insight_col2:
+                    st.metric("Avg Purchases per Customer", f"{customer_counts.mean():.1f}")
+                
+                with insight_col3:
+                    st.metric("Most Frequent Customer", f"{customer_counts.max()} purchases")
+                
+                with insight_col4:
+                    st.metric("Single Purchase Customers", len(customer_counts[customer_counts == 1]))
+                
             else:
-                st.info("Customer columns not detected for customer analysis.")
-                st.dataframe(filtered_data.head(10))
+                # Geographic analysis when no customer columns
+                st.subheader("🌍 Geographic Distribution")
+                
+                if state_cols or country_cols or city_cols:
+                    col1a, col1b = st.columns(2)
+                    
+                    with col1a:
+                        if state_cols:
+                            # Customers per state
+                            state_counts = filtered_data[state_cols[0]].value_counts().head(15)
+                            fig_state = px.bar(
+                                x=state_counts.values,
+                                y=state_counts.index,
+                                orientation='h',
+                                title="Top 15 States by Customer Count",
+                                labels={'x': 'Number of Customers', 'y': 'State'},
+                                color=state_counts.values,
+                                color_continuous_scale='viridis'
+                            )
+                            st.plotly_chart(fig_state, use_container_width=True)
+                        elif city_cols:
+                            # Customers per city
+                            city_counts = filtered_data[city_cols[0]].value_counts().head(15)
+                            fig_city = px.bar(
+                                x=city_counts.values,
+                                y=city_counts.index,
+                                orientation='h',
+                                title="Top 15 Cities by Customer Count",
+                                labels={'x': 'Number of Customers', 'y': 'City'},
+                                color=city_counts.values,
+                                color_continuous_scale='plasma'
+                            )
+                            st.plotly_chart(fig_city, use_container_width=True)
+                    
+                    with col1b:
+                        if country_cols:
+                            # Customers per country
+                            country_counts = filtered_data[country_cols[0]].value_counts()
+                            fig_country = px.pie(
+                                values=country_counts.values,
+                                names=country_counts.index,
+                                title="Customer Distribution by Country",
+                                color_discrete_sequence=px.colors.qualitative.Set1
+                            )
+                            st.plotly_chart(fig_country, use_container_width=True)
+                        elif state_cols:
+                            # State distribution pie chart
+                            state_pie = filtered_data[state_cols[0]].value_counts().head(10)
+                            fig_state_pie = px.pie(
+                                values=state_pie.values,
+                                names=state_pie.index,
+                                title="Top 10 States - Customer Distribution",
+                                color_discrete_sequence=px.colors.qualitative.Set2
+                            )
+                            st.plotly_chart(fig_state_pie, use_container_width=True)
+                    
+                    # Geographic insights
+                    st.subheader("📊 Geographic Insights")
+                    geo_col1, geo_col2, geo_col3, geo_col4 = st.columns(4)
+                    
+                    with geo_col1:
+                        if state_cols:
+                            st.metric("Total States", filtered_data[state_cols[0]].nunique())
+                        elif city_cols:
+                            st.metric("Total Cities", filtered_data[city_cols[0]].nunique())
+                        else:
+                            st.metric("Total Records", len(filtered_data))
+                    
+                    with geo_col2:
+                        if country_cols:
+                            st.metric("Total Countries", filtered_data[country_cols[0]].nunique())
+                        elif state_cols:
+                            top_state = filtered_data[state_cols[0]].value_counts().index[0]
+                            st.metric("Top State", top_state)
+                        else:
+                            st.metric("Unique Values", filtered_data.nunique().sum())
+                    
+                    with geo_col3:
+                        if state_cols:
+                            avg_customers_per_state = len(filtered_data) / filtered_data[state_cols[0]].nunique()
+                            st.metric("Avg Customers/State", f"{avg_customers_per_state:.1f}")
+                        elif city_cols:
+                            avg_customers_per_city = len(filtered_data) / filtered_data[city_cols[0]].nunique()
+                            st.metric("Avg Customers/City", f"{avg_customers_per_city:.1f}")
+                        else:
+                            st.metric("Data Completeness", f"{(1 - filtered_data.isnull().sum().sum() / (len(filtered_data) * len(filtered_data.columns))) * 100:.1f}%")
+                    
+                    with geo_col4:
+                        if state_cols:
+                            max_customers_state = filtered_data[state_cols[0]].value_counts().max()
+                            st.metric("Max Customers/State", max_customers_state)
+                        elif city_cols:
+                            max_customers_city = filtered_data[city_cols[0]].value_counts().max()
+                            st.metric("Max Customers/City", max_customers_city)
+                        else:
+                            st.metric("Columns", len(filtered_data.columns))
+                
+                else:
+                    st.info("No geographic columns (state, country, city) detected for geographic analysis.")
+                    st.dataframe(filtered_data.head(10))
         
         with col2:
             st.subheader("📊 Category Distribution")
